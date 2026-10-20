@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Odds</title>
+<style>
+  :root {
+    --bg: #f3f4f6; --panel: #ffffff; --panel-2: #f8f9fb; --line: #e2e5ea;
+    --text: #15171c; --muted: #657083; --accent: #1f6feb; --accent-soft: #e8f0fe;
+    --up: #10805a; --up-bg: #dcf5ea; --down: #c4320a; --down-bg: #fde7de; --warn: #b54708;
+    --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --panel-2: #1e222a; --line: #2b303b;
+      --text: #e6e8ec; --muted: #98a2b3; --accent: #5b9dff; --accent-soft: #1b2a45;
+      --up: #3ccf91; --up-bg: #0f3326; --down: #ff7a59; --down-bg: #3d1b12; --warn: #f5a524;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  input, select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+  input:focus, select:focus, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  a { color: var(--accent); }
+
+  .btn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* Header: the two-step API flow */
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .top h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; margin: 0; padding: 0; list-style: none; }
+  .flow li { display: flex; flex-direction: column; min-width: 0; max-width: 100%; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+  .flow .k { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .flow .st { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flow li.err .st { color: var(--down); }
+  #gameForm { display: flex; gap: 6px; }
+  #gameInput { width: 150px; font-family: var(--mono); }
+
+  /* Three panes: sports | competitions + matches | odds */
+  .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px minmax(300px, 380px) minmax(0, 1fr); }
+  .pane { min-height: 0; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
+  .pane.odds { background: var(--bg); border-right: 0; }
+  .pane-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .pane-body { flex: 1; min-height: 0; overflow: auto; }
+  .msg { padding: 28px 16px; color: var(--muted); text-align: center; }
+  .msg.err { color: var(--down); }
+  .count { color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  summary { list-style: none; cursor: pointer; }
+  summary::-webkit-details-marker { display: none; }
+
+  .sports { overflow: auto; padding: 6px; }
+  .sport { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: pointer; }
+  .sport:hover { background: var(--panel-2); }
+  .sport.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+  #fxSearch { flex: 1 1 100%; min-width: 0; }
+  #fxReload { margin-left: auto; }
+  .chips { display: flex; gap: 4px; }
+  .chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: none; font-size: 12px; cursor: pointer; }
+  .chip.on { background: var(--text); border-color: var(--text); color: var(--panel); }
+
+  .comp > summary { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
+  .comp > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  .comp[open] > summary::before { transform: rotate(90deg); }
+  .comp .cname { flex: 1; min-width: 0; font-weight: 600; }
+  .comp .region { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+
+  .game { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; cursor: pointer; }
+  .game:hover { background: var(--panel-2); }
+  .game.active { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
+  .when { color: var(--muted); font-size: 12px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .when b { display: block; color: var(--text); font-weight: 600; }
+  .tag { color: var(--warn); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .teams span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .gid { color: var(--muted); font: 11px var(--mono); }
+
+  /* Odds */
+  .match { flex: 1 1 260px; min-width: 0; }
+  .match h2 { margin: 0; font-size: 17px; }
+  .match .meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; color: var(--muted); font-size: 12px; }
+  .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
+  #mktSearch { flex: 1; min-width: 140px; }
+  .tools label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  #odds { padding: 12px; }
+  .groups { max-width: 980px; }
+  .mkt { margin-bottom: 8px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .mkt > summary { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; font-weight: 600; }
+  .mkt[open] > summary { border-bottom: 1px solid var(--line); }
+  .rows { display: grid; gap: 6px; padding: 8px; }
+  .row { display: grid; align-items: center; gap: 6px; }
+  .row.wrap { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .row.wrap .line { grid-column: 1 / -1; text-align: left; }
+  .line { padding-right: 4px; color: var(--muted); font: 12px var(--mono); text-align: right; }
+  .sel { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; transition: background .4s, border-color .4s; }
+  .sel .nm { overflow: hidden; color: var(--muted); font-size: 12.5px; white-space: nowrap; text-overflow: ellipsis; }
+  .sel .pr { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sel.up { background: var(--up-bg); border-color: var(--up); }
+  .sel.up .pr { color: var(--up); }
+  .sel.up .pr::after { content: " ▲"; font-size: 10px; }
+  .sel.down { background: var(--down-bg); border-color: var(--down); }
+  .sel.down .pr { color: var(--down); }
+  .sel.down .pr::after { content: " ▼"; font-size: 10px; }
+
+  @media (min-width: 901px) {
+    body { height: 100vh; }
+  }
+  @media (max-width: 900px) {
+    .layout { display: block; }
+    .pane { border-right: 0; border-bottom: 1px solid var(--line); }
+    .sports { flex-direction: row; gap: 4px; overflow-x: auto; padding: 8px 16px; }
+    .sport { flex: none; width: auto; white-space: nowrap; }
+    .pane-head { padding: 10px 16px; }
+    .fixtures .pane-body { max-height: 55vh; }
+    #odds { padding: 12px 16px; }
+    #gameForm { width: 100%; }
+    #gameInput { flex: 1; min-width: 0; }
+    #mktSearch { flex-basis: 100%; }
+  }
+  @media (max-width: 600px) {
+    .sel { flex-direction: column; align-items: flex-start; gap: 1px; }
+    .sel .nm { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Live Odds</h1>
+  <ol class="flow">
+    <li id="fxStep"><span class="k">API 2 · All fixtures</span><span class="st" id="fxStatus">Loading…</span></li>
+    <li id="odStep"><span class="k">API 1 · Match odds</span><span class="st" id="odStatus">Select a match to get its gameId</span></li>
+  </ol>
+  <form id="gameForm">
+    <input id="gameInput" inputmode="numeric" placeholder="gameId, e.g. 30866658" aria-label="gameId">
+    <button class="btn primary">Load odds</button>
+  </form>
+</header>
+
+<main class="layout">
+  <nav class="pane sports" id="sports" aria-label="Sports"></nav>
+
+  <section class="pane fixtures">
+    <div class="pane-head">
+      <input type="search" id="fxSearch" placeholder="Search teams, competitions, gameId" aria-label="Search fixtures">
+      <div class="chips" id="dayChips">
+        <button class="chip on" data-day="all">All</button>
+        <button class="chip" data-day="today">Today</button>
+        <button class="chip" data-day="tomorrow">Tomorrow</button>
+      </div>
+      <button class="btn" id="fxReload" title="Reload fixtures">Reload</button>
+    </div>
+    <div class="pane-body" id="fixtures"><div class="msg">Loading fixtures…</div></div>
+  </section>
+
+  <section class="pane odds" id="oddsPane">
+    <div class="pane-head">
+      <div class="match" id="matchInfo"><h2>No match selected</h2><div class="meta">Pick a match from the list, or enter a gameId above.</div></div>
+      <div class="tools">
+        <input type="search" id="mktSearch" placeholder="Filter markets" aria-label="Filter markets">
+        <button class="btn" id="expandAll">Expand all</button>
+        <button class="btn" id="collapseAll">Collapse all</button>
+        <label>Auto-refresh
+          <select id="refreshSel">
+            <option value="0">Off</option>
+            <option value="5">5s</option>
+            <option value="10">10s</option>
+            <option value="15" selected>15s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+          </select>
+        </label>
+        <button class="btn" id="oddsReload">Refresh now</button>
+        <a id="rawLink" target="_blank" rel="noopener" hidden>Raw JSON</a>
+      </div>
+    </div>
+    <div class="pane-body" id="odds"></div>
+  </section>
+</main>
+
+<script>
+// ---- Feed config ----------------------------------------------------------
+const API_URL = 'https://feedodds.com/feed/json';
+const API_PARAMS = { language: 'eng', timeZone: 'UTC', brandId: '18764172', key: '1d432fbff594167c1c4de26f02151e23' };
+const DEFAULT_OPEN_GROUPS = 6;   // market groups expanded when a match is first opened
+const FLASH_MS = 6000;           // how long a price change stays highlighted
+
+const apiUrl = (extra = {}) => API_URL + '?' + new URLSearchParams({ ...API_PARAMS, ...extra });
+
+// The feed answers 200 with an empty body for games it no longer offers.
+async function getJson(url, signal) {
+  const res = await fetch(url, { signal, cache: 'no-store' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const text = await res.text();
+  return text.trim() ? JSON.parse(text) : null;
+}
+
+// ---- State ----------------------------------------------------------------
+const state = {
+  sports: [], games: new Map(), sportId: null, query: '', day: 'all', openComps: new Set(),
+  gameId: null, markets: null, startTs: null, prices: new Map(), sig: '', openGroups: null,
+  marketQuery: '', lastUpdated: 0, lastChanges: 0, error: '',
+  refreshSec: 15, timer: null, ctrl: null, inFlight: false,
+};
+
+const $ = id => document.getElementById(id);
+const sportsEl = $('sports'), fixturesEl = $('fixtures'), oddsEl = $('odds');
+
+function el(tag, props = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k === 'text') n.textContent = v;
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) n.append(c);
+  return n;
+}
+const msg = (text, err) => el('div', { class: err ? 'msg err' : 'msg', text });
+
+// ---- Formatting -----------------------------------------------------------
+// Feed timestamps are "YYYY-MM-DD HH:MM:SS" in the timeZone we request (UTC).
+const parseTs = s => s ? new Date(s.replace(' ', 'T') + 'Z').getTime() : NaN;
+const timeOf = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const clock = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+function dayStart(offset = 0) {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offset).getTime();
+}
+function dayLabel(t) {
+  if (t >= dayStart(0) && t < dayStart(1)) return 'Today';
+  if (t >= dayStart(1) && t < dayStart(2)) return 'Tomorrow';
+  return new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
+}
+function dayMatch(t) {
+  if (state.day === 'today') return t >= dayStart(0) && t < dayStart(1);
+  if (state.day === 'tomorrow') return t >= dayStart(1) && t < dayStart(2);
+  return true;
+}
+
+function fmtPrice(p) {
+  if (typeof p !== 'number') return '–';
+  const decimals = (String(p).split('.')[1] || '').length;
+  return p.toFixed(Math.min(3, Math.max(2, decimals)));
+}
+const signed = b => b > 0 ? '+' + b : b < 0 ? '−' + Math.abs(b) : '0';
+const hasLine = b => typeof b === 'number';
+
+// ---- API 2: fixtures ------------------------------------------------------
+function parseFixtures(data) {
+  const sports = [], games = new Map();
+  for (const s of Object.values(data?.sport || {})) {
+    const sport = { id: s.id, name: s.name, comps: [] };
+    for (const r of Object.values(s.region || {})) {
+      for (const c of Object.values(r.competition || {})) {
+        const comp = { id: c.id, name: c.name, region: r.alias, games: [] };
+        for (const g of Object.values(c.game || {})) {
+          const game = { id: String(g.id), home: g.team1_name || '', away: g.team2_name || '', start: parseTs(g.start_ts) };
+          comp.games.push(game);
+          games.set(game.id, { game, comp, sport });
+        }
+        comp.games.sort((a, b) => a.start - b.start);
+        if (comp.games.length) sport.comps.push(comp);
+      }
+    }
+    if (sport.comps.length) sports.push(sport);
+  }
+  return { sports, games };
+}
+
+async function loadFixtures() {
+  setStep('fx', 'Loading…');
+  if (!state.sports.length) fixturesEl.replaceChildren(msg('Loading fixtures…'));
+  try {
+    const { sports, games } = parseFixtures(await getJson(apiUrl()));
+    state.sports = sports;
+    state.games = games;
+    if (!sports.some(s => s.id === state.sportId)) state.sportId = sports[0]?.id ?? null;
+    const selected = games.get(state.gameId);
+    if (selected) { state.sportId = selected.sport.id; state.openComps.add(selected.comp.id); }
+    renderSports();
+    renderFixtures();
+    if (state.gameId) { renderMatchInfo(); renderMarkets(); }   // team names may have just become known
+    setStep('fx', `${games.size.toLocaleString()} matches in ${sports.length} sports · ${timeOf(Date.now())}`);
+  } catch (e) {
+    setStep('fx', 'Failed: ' + e.message, true);
+    if (!state.sports.length) fixturesEl.replaceChildren(msg('Could not load fixtures (' + e.message + '). Use Reload to try again.', true));
+  }
+}
+
+function renderSports() {
+  sportsEl.replaceChildren(...state.sports.map(s => {
+    const n = s.comps.reduce((sum, c) => sum + c.games.filter(g => dayMatch(g.start)).length, 0);
+    return el('button', { class: s.id === state.sportId ? 'sport on' : 'sport', 'data-id': s.id },
+      el('span', { text: s.name }), el('span', { class: 'count', text: n }));
+  }));
+}
+
+function renderFixtures() {
+  const q = state.query.trim().toLowerCase();
+  const pool = q ? state.sports : state.sports.filter(s => s.id === state.sportId);
+  const now = Date.now();
+  const out = [];
+  for (const sport of pool) {
+    for (const comp of sport.comps) {
+      const compHit = q && (comp.name + ' ' + comp.region).toLowerCase().includes(q);
+      const games = comp.games.filter(g => dayMatch(g.start) &&
+        (!q || compHit || g.id.includes(q) || (g.home + ' ' + g.away).toLowerCase().includes(q)));
+      if (!games.length) continue;
+      out.push(el('details', { class: 'comp', 'data-id': comp.id, open: !!q || state.openComps.has(comp.id) },
+        el('summary', {},
+          el('span', { class: 'cname' }, comp.name,
+            el('span', { class: 'region', text: q ? `${sport.name} · ${comp.region}` : comp.region })),
+          el('span', { class: 'count', text: games.length })),
+        games.map(g => gameRow(g, now))));
+    }
+  }
+  fixturesEl.replaceChildren(...(out.length ? out : [msg(q ? `No matches for “${state.query.trim()}”.` : 'No matches for this filter.')]));
+}
+
+function gameRow(g, now) {
+  const started = g.start <= now;
+  return el('button', { class: g.id === state.gameId ? 'game active' : 'game', 'data-id': g.id },
+    el('span', { class: 'when' },
+      started ? el('span', { class: 'tag', text: 'Started' }) : dayLabel(g.start),
+      el('b', { text: timeOf(g.start) })),
+    el('span', { class: 'teams' }, el('span', { text: g.home }), g.away && el('span', { text: g.away })),
+    el('span', { class: 'gid', text: g.id }));
+}
+
+// ---- API 1: match odds ----------------------------------------------------
+function selectGame(id) {
+  id = String(id).trim();
+  if (!/^\d+$/.test(id)) return;
+  if (id !== state.gameId) {
+    Object.assign(state, { gameId: id, markets: null, startTs: null, prices: new Map(), sig: '', openGroups: null, error: '' });
+  }
+  history.replaceState(null, '', '#game=' + id);
+  $('gameInput').value = id;
+  $('rawLink').href = apiUrl({ gameId: id });
+  $('rawLink').hidden = false;
+  for (const b of fixturesEl.querySelectorAll('.game')) b.classList.toggle('active', b.dataset.id === id);
+  renderMatchInfo();
+  loadOdds(true);
+  schedule();
+  if (matchMedia('(max-width: 900px)').matches) $('oddsPane').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadOdds(initial) {
+  const id = state.gameId;
+  if (!id) return;
+  if (initial) {
+    state.ctrl?.abort();
+    state.markets = null;
+    state.sig = '';
+    oddsEl.replaceChildren(msg('Loading odds…'));
+    setStep('od', `gameId ${id} · loading…`);
+  } else if (state.inFlight) return;
+
+  const ctrl = new AbortController();
+  state.ctrl = ctrl;
+  state.inFlight = true;
+  try {
+    const data = await getJson(apiUrl({ gameId: id }), ctrl.signal);
+    if (id !== state.gameId) return;
+    state.error = '';
+    state.lastUpdated = Date.now();
+    applyOdds(data);
+  } catch (e) {
+    if (e.name === 'AbortError' || id !== state.gameId) return;
+    state.error = e.message;
+    if (!state.markets) oddsEl.replaceChildren(msg('Could not load odds (' + e.message + ').', true));
+    setStep('od', `gameId ${id} · failed: ${e.message}`, true);
+  } finally {
+    if (state.ctrl === ctrl) { state.ctrl = null; state.inFlight = false; }
+  }
+}
+
+function applyOdds(data) {
+  const markets = data?.markets || [];
+  state.startTs = parseTs(data?.start_ts);
+
+  const changes = new Map(), prices = new Map();
+  for (const m of markets) for (const e of m.events) {
+    const prev = state.prices.get(e.event_id);
+    if (prev != null && prev !== e.price) changes.set(e.event_id, e.price > prev ? 'up' : 'down');
+    prices.set(e.event_id, e.price);
+  }
+  state.prices = prices;
+  state.markets = markets;
+  state.lastChanges = changes.size;
+
+  // Same market set as last time: patch prices in place so open groups, focus and scroll survive.
+  const sig = markets.map(m => m.id).join(',');
+  if (sig && sig === state.sig) patchPrices(changes);
+  else { state.sig = sig; renderMarkets(changes); }
+
+  renderMatchInfo();
+  setStep('od', markets.length
+    ? `gameId ${state.gameId} · ${markets.length} markets · ${clock(state.lastUpdated)}`
+    : `gameId ${state.gameId} · no markets`);
+}
+
+function renderMatchInfo() {
+  const info = state.games.get(state.gameId);
+  const start = info?.game.start ?? state.startTs;
+  const title = info ? [info.game.home, info.game.away].filter(Boolean).join(' vs ') : `Game ${state.gameId}`;
+  const meta = [
+    info ? `${info.sport.name} · ${info.comp.region} · ${info.comp.name}` : state.sports.length && 'Not in the current fixtures list',
+    Number.isFinite(start) && `${dayLabel(start)} ${timeOf(start)}`,
+    `gameId ${state.gameId}`,
+    state.markets?.length && `${state.markets.length} markets`,
+    state.lastUpdated && state.markets && `Updated ${clock(state.lastUpdated)}` + (state.lastChanges ? ` · ${state.lastChanges} price changes` : ''),
+    state.error && `Last refresh failed: ${state.error}`,
+  ].filter(Boolean);
+  $('matchInfo').replaceChildren(el('h2', { text: title }), el('div', { class: 'meta' }, meta.map(t => el('span', { text: t }))));
+}
+
+// Markets that share a name (e.g. every "Total Goals" line) become one group, sorted by line.
+function groupMarkets(markets) {
+  const groups = new Map();
+  for (const m of markets) {
+    const name = m.name.replace(/\s+/g, ' ').trim();
+    if (!groups.has(name)) groups.set(name, { name, markets: [] });
+    groups.get(name).markets.push(m);
+  }
+  const lineOf = m => {
+    const first = [...m.events].sort((a, b) => a.order - b.order)[0];
+    return hasLine(first?.base) ? first.base : 0;
+  };
+  for (const g of groups.values()) g.markets.sort((a, b) => lineOf(a) - lineOf(b));
+  return [...groups.values()];
+}
+
+function renderMarkets(changes = new Map()) {
+  const markets = state.markets;
+  if (!markets) return;
+  if (!markets.length) {
+    oddsEl.replaceChildren(msg(`The feed returned no markets for gameId ${state.gameId}. This usually means the match has finished or is no longer offered.`));
+    return;
+  }
+  const groups = groupMarkets(markets);
+  if (!state.openGroups) state.openGroups = new Set(groups.slice(0, DEFAULT_OPEN_GROUPS).map(g => g.name));
+  const q = state.marketQuery.trim().toLowerCase();
+  const shown = q ? groups.filter(g => g.name.toLowerCase().includes(q)) : groups;
+  const info = state.games.get(state.gameId);
+  const teams = { W1: info?.game.home, W2: info?.game.away };
+
+  oddsEl.replaceChildren(shown.length
+    ? el('div', { class: 'groups' }, shown.map(g => groupEl(g, !!q || state.openGroups.has(g.name), teams, changes)))
+    : msg(`No markets match “${state.marketQuery.trim()}”.`));
+}
+
+function groupEl(group, open, teams, changes) {
+  const rows = group.markets.map(m => {
+    const evs = [...m.events].sort((a, b) => a.order - b.order);
+    // One line for the whole row (Over/Under 2.5) goes in the label; per-selection lines (handicaps) go on each selection.
+    const shared = evs.length && hasLine(evs[0].base) && evs.every(e => e.base === evs[0].base);
+    return { evs, label: shared ? String(evs[0].base) : '', perSelection: !shared };
+  });
+  const cols = Math.max(...rows.map(r => r.evs.length));
+  const labelled = rows.some(r => r.label);
+  const template = `${labelled ? '52px ' : ''}repeat(${cols}, minmax(0, 1fr))`;
+
+  return el('details', { class: 'mkt', 'data-name': group.name, open },
+    el('summary', {}, el('span', { text: group.name }),
+      group.markets.length > 1 && el('span', { class: 'count', text: `${group.markets.length} lines` })),
+    el('div', { class: 'rows' }, rows.map(r => {
+      const cells = r.evs.map(e => selEl(e, r.perSelection, teams, changes));
+      return cols > 3
+        ? el('div', { class: 'row wrap' }, r.label && el('span', { class: 'line', text: r.label }), cells)
+        : el('div', { class: 'row', style: `grid-template-columns: ${template}` }, labelled && el('span', { class: 'line', text: r.label }), cells);
+    })));
+}
+
+function selEl(e, perSelection, teams, changes) {
+  let name = e.name.trim();
+  if (teams[name]) name = teams[name];
+  if (perSelection && hasLine(e.base)) name += ' ' + signed(e.base);
+  const cell = el('div', { class: 'sel', 'data-eid': e.event_id },
+    el('span', { class: 'nm', text: name, title: name }),
+    el('span', { class: 'pr', text: fmtPrice(e.price) }));
+  if (changes.has(e.event_id)) flash(cell, changes.get(e.event_id));
+  return cell;
+}
+
+function patchPrices(changes) {
+  for (const [eid, dir] of changes) {
+    const cell = oddsEl.querySelector(`.sel[data-eid="${CSS.escape(eid)}"]`);
+    if (!cell) continue;
+    cell.querySelector('.pr').textContent = fmtPrice(state.prices.get(eid));
+    flash(cell, dir);
+  }
+}
+
+function flash(cell, dir) {
+  cell.classList.remove('up', 'down');
+  cell.classList.add(dir);
+  clearTimeout(cell._flash);
+  cell._flash = setTimeout(() => cell.classList.remove(dir), FLASH_MS);
+}
+
+function schedule() {
+  clearInterval(state.timer);
+  if (state.gameId && state.refreshSec > 0) {
+    state.timer = setInterval(() => { if (!document.hidden) loadOdds(false); }, state.refreshSec * 1000);
+  }
+}
+
+function setStep(which, text, err) {
+  $(which + 'Status').textContent = text;
+  $(which + 'Status').title = text;
+  $(which + 'Step').classList.toggle('err', !!err);
+}
+
+// ---- Wiring ---------------------------------------------------------------
+sportsEl.addEventListener('click', e => {
+  const b = e.target.closest('.sport');
+  if (!b) return;
+  state.sportId = Number(b.dataset.id);
+  for (const s of sportsEl.children) s.classList.toggle('on', s === b);
+  fixturesEl.scrollTop = 0;
+  renderFixtures();
+});
+
+fixturesEl.addEventListener('click', e => {
+  const b = e.target.closest('.game');
+  if (b) selectGame(b.dataset.id);
+});
+
+// Remember which competitions / market groups the user opened (not ones a search forced open).
+fixturesEl.addEventListener('toggle', e => {
+  const d = e.target;
+  if (!d.isConnected || !d.matches('.comp') || state.query.trim()) return;
+  const id = Number(d.dataset.id);
+  d.open ? state.openComps.add(id) : state.openComps.delete(id);
+}, true);
+
+oddsEl.addEventListener('toggle', e => {
+  const d = e.target;
+  if (!d.isConnected || !d.matches('.mkt') || state.marketQuery.trim() || !state.openGroups) return;
+  d.open ? state.openGroups.add(d.dataset.name) : state.openGroups.delete(d.dataset.name);
+}, true);
+
+$('fxSearch').addEventListener('input', e => { state.query = e.target.value; renderFixtures(); });
+
+$('dayChips').addEventListener('click', e => {
+  const b = e.target.closest('.chip');
+  if (!b) return;
+  state.day = b.dataset.day;
+  for (const c of $('dayChips').children) c.classList.toggle('on', c === b);
+  renderSports();
+  renderFixtures();
+});
+
+$('fxReload').addEventListener('click', loadFixtures);
+
+$('gameForm').addEventListener('submit', e => {
+  e.preventDefault();
+  selectGame($('gameInput').value);
+});
+
+$('mktSearch').addEventListener('input', e => { state.marketQuery = e.target.value; renderMarkets(); });
+
+$('expandAll').addEventListener('click', () => {
+  if (!state.markets?.length) return;
+  state.openGroups = new Set(groupMarkets(state.markets).map(g => g.name));
+  renderMarkets();
+});
+$('collapseAll').addEventListener('click', () => {
+  if (!state.markets?.length) return;
+  state.openGroups = new Set();
+  renderMarkets();
+});
+
+$('refreshSel').addEventListener('change', e => { state.refreshSec = Number(e.target.value); schedule(); });
+$('oddsReload').addEventListener('click', () => loadOdds(!state.markets));
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.gameId && state.refreshSec && Date.now() - state.lastUpdated > state.refreshSec * 1000) loadOdds(false);
+});
+
+loadFixtures();
+const fromHash = location.hash.match(/game=(\d+)/);
+if (fromHash) selectGame(fromHash[1]);
+</script>
+</body>
+</html>
